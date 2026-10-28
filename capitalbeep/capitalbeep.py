@@ -318,7 +318,7 @@ def _sd_speak_hook(self, text, callback=None, event_types=None):
         return _orig_sd_speak(self, text, callback, event_types)
 
 
-def _spell_item_hook(self, text):
+def _spell_item_hook(self, text, *args, **kwargs):
     """Spelling a multi-letter string needs its beeps synchronised.
 
     Orca sends every character to Speech Dispatcher without waiting, so the loop
@@ -330,11 +330,17 @@ def _spell_item_hook(self, text):
     The original loops over the string calling speak_character, so driving it one
     character at a time is equivalent and lets a character that never reached
     Speech Dispatcher (a different speech backend, say) fall back to beeping now.
+
+    *args/**kwargs: Orca grew spell_item's signature over time (obj, start_offset
+    etc.). Accept whatever upstream calls us with, forward it on the fallback
+    path, and drop it on the per-character path (where obj/offset mean the whole
+    thing, not any individual character — the original ignored those for the
+    per-character call too).
     """
     global _sync_depth, _pending_sync_beep
 
     if not _sync_available or len(text.strip()) <= 1:
-        return _orig_spell_item(self, text)
+        return _orig_spell_item(self, text, *args, **kwargs)
 
     for character in text:
         _sync_depth += 1
@@ -348,13 +354,18 @@ def _spell_item_hook(self, text):
     return None
 
 
-def _spell_phonetically_hook(self, item_string):
+def _spell_phonetically_hook(self, item_string, *args, **kwargs):
     """Phonetic spelling needs an explicit beep: the case is gone by then.
 
     get_phonetic_name() lowercases its input, so "alpha" is spoken for both a and
     A and there is nothing in the spoken text left to detect. As with spell_item,
     the original loops over characters, so driving it one character at a time is
     equivalent and keeps each beep with its own letter.
+
+    *args/**kwargs: upstream Orca's spell_phonetically grew extra positional
+    params (obj, start_offset). Accept whatever we are called with and ignore it
+    here — the per-character delegation does not forward them, matching the
+    original's own behaviour inside its character loop.
     """
     global _pending_sync_beep
 

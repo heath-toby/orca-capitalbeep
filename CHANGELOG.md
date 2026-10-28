@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.1.1
+
+**Spelling a word with the Orca keybind no longer raises TypeError on recent Orca.**
+
+### Fixed
+
+- **`spell_item` and `spell_phonetically` hooks accept extra positional args.** Orca's
+  `SpeechPresenter.spell_item` and `spell_phonetically` have grown extra parameters
+  (`obj`, `start_offset`) that `presentation_manager.py` passes positionally. The old
+  hooks were `(self, text)` / `(self, item_string)` only, so every call from the current
+  Orca raised `TypeError: _spell_item_hook() takes 2 positional arguments but 4 were
+  given`, which killed the whole spell-item path.
+
+  The hooks now accept `*args, **kwargs`. The fallback path in `_spell_item_hook`
+  forwards them to the original (preserving upstream behaviour for single-character or
+  sync-unavailable cases). The per-character delegation inside both hooks does not
+  forward them — the character loop operates on individual characters, where `obj` and
+  `start_offset` do not apply, matching the original's own behaviour in its character
+  loop.
+
+  Caught by the Monday-morning maintenance agent's signature-compatibility check — the
+  same mechanism we built after Polyglot's `update_braille` was broken the same way.
+
 ## 2.1.0
 
 **The audio device is released between beeps, which stops the beep vanishing on Bluetooth.**
