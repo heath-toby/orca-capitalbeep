@@ -8,7 +8,7 @@ $XDG_DATA_HOME/orca/capitalbeep/, outside the package, so that writing
 them cannot invalidate that approval.
 """
 
-__version__ = "2.2.1"
+__version__ = "2.3.0"
 
 from orca.extension import Extension
 from orca.extension_preferences import ExtensionPreference
@@ -18,11 +18,6 @@ from orca.extension_preferences import ExtensionPreference
 # orca_user_extension.<name> but never creates `orca_user_extension`
 # itself, and `from . import module` goes through __import__ with the
 # full dotted path, which insists on importing that absent grandparent.
-from .capitalbeep import CAPS_FREQUENCY_HZ as _CAPS_FREQUENCY_HZ
-from .capitalbeep import CAPS_MODE_DEFAULT as _CAPS_MODE_DEFAULT
-from .capitalbeep import CAPS_MODE_EVERY as _CAPS_MODE_EVERY
-from .capitalbeep import CAPS_MODE_LOWERCASE as _CAPS_MODE_LOWERCASE
-from .capitalbeep import CAPS_MODE_OFF as _CAPS_MODE_OFF
 from .capitalbeep import install as _install
 from .capitalbeep import toggle as _toggle
 from .capitalbeep import uninstall as _uninstall
@@ -32,8 +27,8 @@ class CapitalBeep(Extension):
     """Beeps whenever a capital letter is read out as a character."""
 
     GROUP_LABEL = "Capital Beep"
-    DESCRIPTION = "Plays a short tone whenever a capital letter is read as a character, during navigation, spelling and typing echo, and a second, higher tone to warn that caps lock is on."
-    VERSION = "2.2.1"  # keep in sync with __version__; read by AST, must be a literal
+    DESCRIPTION = "Plays a short tone whenever a capital letter is read as a character, during navigation, spelling and typing echo."
+    VERSION = "2.3.0"  # keep in sync with __version__; read by AST, must be a literal
     AUTHOR = "Toby"
 
     def _get_commands(self) -> list:
@@ -56,33 +51,19 @@ class CapitalBeep(Extension):
             )
         ]
 
-    # These two are the only preferences, and they are declared rather than
-    # given a dialog of their own, because they are a radio group and a number
-    # -- nothing a generated form cannot render. The on/off switch is still
-    # deliberately absent from here: Orca+Ctrl+Shift+C announces and persists
-    # the state, and the extension's own enable/disable sits in User
-    # Extensions already. A third control saying the same thing would only
-    # confuse.
+    # One preference, declared rather than given a dialog of its own. The
+    # caps lock warning's mode and pitch used to sit here too; 2.3.0 moved
+    # them to the Caps Lock Fix add-on, where the subject is caps lock rather
+    # than capitals being read.
+    #
+    # The on/off switch is deliberately absent: Orca+Ctrl+Shift+C announces
+    # and persists the state, and the extension's own enable/disable sits in
+    # User Extensions already. A third control saying the same thing would
+    # only confuse.
     def get_preferences(self) -> list[ExtensionPreference]:
         """Returns this extension's declarative preferences."""
 
         return [
-            ExtensionPreference.enum(
-                "caps-lock-beep",
-                "Warn that caps lock is on",
-                (
-                    (_CAPS_MODE_LOWERCASE,
-                     "When a lowercase letter is typed, because caps lock is on"),
-                    (_CAPS_MODE_EVERY, "On every letter typed while caps lock is on"),
-                    (_CAPS_MODE_OFF, "Never"),
-                ),
-                _CAPS_MODE_DEFAULT,
-            ),
-            ExtensionPreference.integer(
-                "caps-lock-pitch",
-                "Pitch of the caps lock warning, in hertz",
-                _CAPS_FREQUENCY_HZ, 100, 8000,
-            ),
             ExtensionPreference.boolean(
                 "debug", "Log diagnostics to capitalbeep/debug.log", False,
             ),

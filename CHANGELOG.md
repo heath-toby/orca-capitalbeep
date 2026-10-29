@@ -1,5 +1,42 @@
 # Changelog
 
+## 2.3.0
+
+**The caps lock warning moves out, to the add-on whose subject it is.**
+
+It shipped here in 2.2.0 and did not belong: this add-on is about a capital
+being *read*, and a caps lock warning is about caps lock being *on*. Toby,
+making the call: *"Leave Capital Beep as Capital Beep. Move the caps lock
+indicator to caps lock fix."*
+
+It now lives in
+[orca-caps-lock-fix](https://github.com/heath-toby/orca-caps-lock-fix) 2.1.0,
+with the same three options under the same labels and a fourth that reads each
+letter aloud instead of beeping.
+
+### Removed
+
+- The `caps-lock-beep` and `caps-lock-pitch` preferences. The only declared
+  preference left is the diagnostics toggle.
+- `caps_lock_beep_wanted`, `_beep_caps`, the second player, the caps-lock
+  constants and `_NOT_TYPING_MASK`.
+- The `KeyboardEvent.__init__` hook, which was the only thing here that
+  watched keys rather than speech. Everything that remains hangs off Orca's
+  speech path again, which is a cleaner thing for this add-on to be.
+- `tests-capslock.py`, whose rows went with the feature — including the one
+  that caught 2.2.0's dead Orca-modifier check.
+
+### The two compose
+
+A letter read out by the speaking mode in the other add-on passes through
+`SpeechPresenter.speak_character`, which is exactly what this add-on wraps. So
+you hear the letter *and* the capital beep that says it is a capital, with no
+wiring between the two projects. Toby: *"if it's beeping with each letter, that
+can continue connecting with 'these are all capitals', which makes a lot of
+sense."*
+
+Nothing else changes. 8 test rows on the audio lifecycle, as before.
+
 ## 2.2.1
 
 **The caps lock warning could sound on an Orca command.** Found by a code
