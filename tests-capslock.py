@@ -40,7 +40,11 @@ def check(name, got, want):
     ok = got == want
     if not ok:
         fails += 1
-    rows.append((name, want, got, "ok" if ok else "FAIL"))
+    # Record what was compared, not a reference to it. These tests pass live
+    # lists in, and a list appended to later would print its final state beside
+    # a verdict reached much earlier -- a row read "want=[] got=[1]" and
+    # claimed to pass, which was true and looked like a lie.
+    rows.append((name, repr(want), repr(got), "ok" if ok else "FAIL"))
 
 
 SHIFT = keybindings.SHIFT_MODIFIER_MASK
@@ -202,6 +206,54 @@ forwarded.clear()
 cb._keyboard_hook(_Event(), True, 0, 0, SHIFT, "a")
 check("a beep that raises still leaves the event built",
       forwarded, [(True, "a")])
+cb._beep_caps = _saved_beep
+
+# --- the mask tested must be the event's own -----------------------------
+# Orca ORs its modifier bit into self.modifiers *inside* the constructor, so
+# the bit is never present in the `modifiers` argument. Testing the argument
+# made the whole Orca-modifier term of _NOT_TYPING_MASK dead code, and with
+# caps lock on, Orca+Shift+H to list headings arrives as a lowercase "h" with
+# shift held -- exactly the pattern the lowercase warning fires on. So
+# commands beeped.
+beeped = []
+
+
+def _counting_beep():
+    beeped.append(1)
+
+
+cb._beep_caps = _counting_beep
+cb._settings_source = lambda: {"caps-lock-beep": LOWER}
+
+
+class _OrcaModifierEvent:
+    """An event whose own mask carries Orca's modifier bit, as Orca's does."""
+
+    def __init__(self):
+        self.modifiers = SHIFT | keybindings.ORCA_MODIFIER_MASK
+
+
+beeped.clear()
+cb._keyboard_hook(_OrcaModifierEvent(), True, 0, 0, SHIFT, "h")
+check("an Orca command is not a letter typed with caps lock on", beeped, [])
+
+beeped.clear()
+
+
+class _PlainEvent:
+    def __init__(self):
+        self.modifiers = SHIFT
+
+
+cb._keyboard_hook(_PlainEvent(), True, 0, 0, SHIFT, "h")
+check("...but a shifted lowercase letter on its own still warns",
+      len(beeped), 1)
+
+beeped.clear()
+cb._keyboard_hook(_Event(), True, 0, 0, SHIFT, "h")
+check("an event with no mask of its own falls back to the argument",
+      len(beeped), 1)
+
 cb._beep_caps = _saved_beep
 cb._orig_keyboard_event_init = _saved_original
 cb._settings_source = None

@@ -8,7 +8,7 @@ $XDG_DATA_HOME/orca/capitalbeep/, outside the package, so that writing
 them cannot invalidate that approval.
 """
 
-__version__ = "2.2.0"
+__version__ = "2.2.1"
 
 from orca.extension import Extension
 from orca.extension_preferences import ExtensionPreference
@@ -33,7 +33,7 @@ class CapitalBeep(Extension):
 
     GROUP_LABEL = "Capital Beep"
     DESCRIPTION = "Plays a short tone whenever a capital letter is read as a character, during navigation, spelling and typing echo, and a second, higher tone to warn that caps lock is on."
-    VERSION = "2.2.0"  # keep in sync with __version__; read by AST, must be a literal
+    VERSION = "2.2.1"  # keep in sync with __version__; read by AST, must be a literal
     AUTHOR = "Toby"
 
     def _get_commands(self) -> list:

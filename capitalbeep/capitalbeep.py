@@ -66,6 +66,16 @@ CAPS_MODE_DEFAULT = CAPS_MODE_LOWERCASE
 # modifier matters especially here: on the laptop layout it *is* Caps_Lock, so
 # without this every Orca command would look like a letter typed with caps
 # lock on.
+#
+# **This must be tested against the event's own ``self.modifiers``, not against
+# the ``modifiers`` argument the constructor was called with.** Orca adds its
+# modifier bit inside ``KeyboardEvent.__init__`` and not before it
+# (``input_event.py``: ``if modifier_manager.get_pressed_state():
+# self.modifiers |= keybindings.ORCA_MODIFIER_MASK``), so the bit is never
+# present in the argument and this whole term was dead. The visible symptom:
+# with caps lock on and Caps_Lock as the Orca modifier, Orca+Shift+H to list
+# headings arrives as a lowercase "h" with shift held, which is exactly the
+# pattern the lowercase warning looks for -- so commands beeped.
 _NOT_TYPING_MASK = (
     (1 << keybindings.MODIFIER_ORCA)
     | keybindings.ALT_MODIFIER_MASK
@@ -638,12 +648,17 @@ def _keyboard_hook(self, pressed, keycode, keysym, modifiers, text):
     """
     _orig_keyboard_event_init(self, pressed, keycode, keysym, modifiers, text)
     try:
+        # self.modifiers, not the argument: see _NOT_TYPING_MASK. The original
+        # constructor has already run, so the event's own mask is complete and
+        # carries Orca's modifier bit; the argument never does.
+        mask = getattr(self, "modifiers", modifiers)
         mode = _caps_mode()
-        wanted = caps_lock_beep_wanted(pressed, modifiers, text, mode)
+        wanted = caps_lock_beep_wanted(pressed, mask, text, mode)
         if pressed and _debug_on():
-            shift = bool(modifiers & keybindings.SHIFT_MODIFIER_MASK)
-            _debug(f"key: text={text!r} modifiers=0x{modifiers:x} shift={shift} "
-                   f"not-typing={bool(modifiers & _NOT_TYPING_MASK)} "
+            shift = bool(mask & keybindings.SHIFT_MODIFIER_MASK)
+            _debug(f"key: text={text!r} modifiers=0x{mask:x} "
+                   f"arg=0x{modifiers:x} shift={shift} "
+                   f"not-typing={bool(mask & _NOT_TYPING_MASK)} "
                    f"mode={mode} enabled={_enabled} warn={wanted}")
         if wanted:
             _beep_caps()

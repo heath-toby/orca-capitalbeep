@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.2.1
+
+**The caps lock warning could sound on an Orca command.** Found by a code
+review of 2.2.0.
+
+`_NOT_TYPING_MASK` exists to say "a letter arriving with one of these held is
+a command, not typing", and its comment singles out the Orca modifier as the
+one that matters most, because on the laptop layout that modifier *is*
+Caps_Lock. But the hook tested the `modifiers` **argument** the constructor was
+called with, and Orca adds its own modifier bit *inside* that constructor:
+
+```python
+if modifier_manager.get_pressed_state():
+    self.modifiers |= keybindings.ORCA_MODIFIER_MASK
+```
+
+So the bit was never present in what was tested, and the whole term was dead
+code. The visible symptom, on exactly the setup this was written for: caps lock
+on, Caps_Lock as the Orca modifier, press Orca+Shift+H to list headings — with
+caps lock on, shift yields a lowercase `h`, which is precisely the pattern the
+lowercase warning fires on. The command beeped.
+
+Now reads `self.modifiers`, which is complete by then because the original
+constructor has already run. Three test rows: an Orca command does not warn, a
+shifted lowercase letter on its own still does, and an event with no mask of
+its own falls back to the argument.
+
+Also: the test harness stored live list references and printed them after later
+mutation, so a row read `want=[] got=[1]` and truthfully claimed to pass.
+Values are snapshotted at comparison time now. 40 rows.
+
 ## 2.2.0
 
 **A second, higher tone warns that caps lock is on.**

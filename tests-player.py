@@ -43,7 +43,11 @@ def check(name, got, want):
     ok = got == want
     if not ok:
         fails += 1
-    rows.append((name, want, got, "ok" if ok else "FAIL"))
+    # Record what was compared, not a reference to it. These tests pass live
+    # lists in, and a list appended to later would print its final state beside
+    # a verdict reached much earlier -- a row read "want=[] got=[1]" and
+    # claimed to pass, which was true and looked like a lie.
+    rows.append((name, repr(want), repr(got), "ok" if ok else "FAIL"))
 
 
 DATA = os.path.join(
