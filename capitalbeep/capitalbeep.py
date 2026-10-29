@@ -23,10 +23,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 
 from gi.repository import GLib
 
-from orca import presentation_manager, speech_manager, speech_presenter
+from orca import (
+    input_event,
+    keybindings,
+    presentation_manager,
+    speech_manager,
+    speech_presenter,
+)
 
 from .tone import BeepPlayer, render_wav
 
@@ -38,6 +45,32 @@ _log = logging.getLogger("orca-capitalbeep")
 FREQUENCY_HZ = 660
 DURATION_MS = 80
 FADE_MS = 8
+
+# --- the caps lock warning ---------------------------------------------------
+# A second, higher tone for "caps lock is on and you probably did not mean it".
+# NVDA has had this since about 2010 as "Beep for lowercase with Capslock", on
+# by default, and uses a pitch deliberately unlike its uppercase beep (3000 Hz)
+# so the two cannot be confused. Same reasoning here: an octave above the
+# capital beep is unmistakably related and unmistakably different. The pitch is
+# a declared preference, so 3000 is one setting away for anyone who wants
+# NVDA's exact sound.
+CAPS_FREQUENCY_HZ = 1320
+CAPS_DURATION_MS = 60
+
+CAPS_MODE_OFF = "off"
+CAPS_MODE_LOWERCASE = "lowercase"
+CAPS_MODE_EVERY = "every-letter"
+CAPS_MODE_DEFAULT = CAPS_MODE_LOWERCASE
+
+# Letters arriving with any of these held are commands, not typing. The Orca
+# modifier matters especially here: on the laptop layout it *is* Caps_Lock, so
+# without this every Orca command would look like a letter typed with caps
+# lock on.
+_NOT_TYPING_MASK = (
+    (1 << keybindings.MODIFIER_ORCA)
+    | keybindings.ALT_MODIFIER_MASK
+    | (1 << 2)  # Atspi.ModifierType.CONTROL
+)
 
 # Orca's speech volume is 0.0-10.0; GStreamer's is 0.0-1.0. A full-scale sine is
 # far louder than speech at the same nominal setting, so scale it down. Raise or
@@ -53,8 +86,57 @@ _DATA_DIR = os.path.join(
 )
 _STATE_PATH = os.path.join(_DATA_DIR, "state.json")
 
+# Diagnostics go to a file outside the package -- Orca hashes every file in an
+# extension directory, so anything written inside one invalidates the approval.
+#
+#     ORCA_CAPITALBEEP_DEBUG=1 orca --replace &
+#
+# The environment variable only works when Orca is started from a shell. Under
+# orca.service it never reaches the process, which is why there is a declared
+# `debug` preference as well -- that one can be switched on in Orca's
+# preferences and takes effect on the next keystroke.
+_DEBUG_PATH = os.path.join(_DATA_DIR, "debug.log")
+_DEBUG_ENV = os.environ.get("ORCA_CAPITALBEEP_DEBUG", "").lower() in (
+    "1", "true", "yes")
+_debug_log = None
+
+
+def _debug_on() -> bool:
+    """True if anything would be written to the debug log."""
+    if _DEBUG_ENV:
+        return True
+    return bool(_caps_setting("debug", False))
+
+
+def _debug(message: str) -> None:
+    """Append one line to the debug log, if one was asked for.
+
+    Checked per call rather than once at import, so the preference can be
+    turned on without restarting anything. Callers that build an expensive
+    message should ask _debug_on() first -- the keyboard hook does, because it
+    runs on every key.
+    """
+    global _debug_log
+    if not _debug_on():
+        return
+    try:
+        if _debug_log is None:
+            os.makedirs(_DATA_DIR, exist_ok=True)
+            _debug_log = open(_DEBUG_PATH, "a")  # pylint: disable=consider-using-with
+        stamp = time.strftime("%H:%M:%S")
+        _debug_log.write(f"{stamp}.{int(time.time() * 1000) % 1000:03d} {message}\n")
+        _debug_log.flush()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
 _enabled = True
 _player: BeepPlayer | None = None
+_caps_player: BeepPlayer | None = None
+_caps_pitch_rendered: int | None = None
+
+# Set by install(); returns the extension's settings dict. Read per keystroke
+# so a change in Orca's preferences takes effect without a reload.
+_settings_source = None
 
 # Every monkey-patch we apply, as (owner, attribute, original, was_own).
 # Recorded so uninstall() can put things back exactly as they were. This
@@ -134,6 +216,64 @@ def _beep_volume() -> float:
     return max(0.0, min(1.0, (volume / 10.0) * VOLUME_HEADROOM))
 
 
+def _caps_setting(key: str, default):
+    """One value out of the extension's declared preferences."""
+    if _settings_source is None:
+        return default
+    try:
+        return _settings_source().get(key, default)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return default
+
+
+def _caps_mode() -> str:
+    mode = _caps_setting("caps-lock-beep", CAPS_MODE_DEFAULT)
+    if mode not in (CAPS_MODE_OFF, CAPS_MODE_LOWERCASE, CAPS_MODE_EVERY):
+        return CAPS_MODE_DEFAULT
+    return mode
+
+
+def _caps_pitch() -> int:
+    try:
+        pitch = int(_caps_setting("caps-lock-pitch", CAPS_FREQUENCY_HZ))
+    except (TypeError, ValueError):
+        return CAPS_FREQUENCY_HZ
+    return max(100, min(8000, pitch))
+
+
+def caps_lock_beep_wanted(pressed: bool, modifiers: int, text: str,
+                          mode: str) -> bool:
+    """True if this key press should sound the caps lock warning.
+
+    **Caps lock is inferred from the character that actually arrived, not read
+    from the lock bit, and that is deliberate.** Orca remaps Caps_Lock into its
+    own modifier on the laptop layout, so the X lock state is not a thing worth
+    trusting here -- whereas the letter that came out is ground truth, and it
+    is also precisely what the beep is about:
+
+    - Shift held and a *lowercase* letter arrived: caps lock is on, and this is
+      the letter you did not ask for. NVDA's case, and this add-on's default.
+    - No shift and an *uppercase* letter arrived: caps lock is on and doing
+      what it says. Only the "every letter" mode beeps for that.
+
+    The inference assumes a layout where shift pairs the cases of a letter,
+    which Latin and Cyrillic both do.
+    """
+    if not pressed or mode == CAPS_MODE_OFF:
+        return False
+    if modifiers & _NOT_TYPING_MASK:
+        return False
+    letter = text or ""
+    if len(letter) != 1 or not letter.isalpha():
+        return False
+    shift_held = bool(modifiers & keybindings.SHIFT_MODIFIER_MASK)
+    if shift_held and letter.islower():
+        return True
+    if not shift_held and letter.isupper():
+        return mode == CAPS_MODE_EVERY
+    return False
+
+
 def _is_capital(text: str) -> bool:
     """True if text is exactly one uppercase letter, matching Orca's own test."""
     stripped = text.strip()
@@ -150,6 +290,33 @@ def _beep() -> None:
     except Exception:
         pass
     _player.play(_beep_volume())
+
+
+def _beep_caps() -> None:
+    """Play the caps lock warning, re-rendering it if the pitch has changed."""
+    global _caps_player, _caps_pitch_rendered
+    if not _enabled:
+        return
+    try:
+        if speech_manager.get_manager().get_speech_is_muted():
+            return
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    pitch = _caps_pitch()
+    _debug(f"caps warning: pitch={pitch} rendered={_caps_pitch_rendered}")
+    if _caps_player is None or _caps_pitch_rendered != pitch:
+        path = os.path.join(
+            _DATA_DIR, f"caps_{pitch}hz_{CAPS_DURATION_MS}ms_{FADE_MS}fade.wav")
+        if not os.path.isfile(path):
+            if not render_wav(path, pitch, CAPS_DURATION_MS, FADE_MS):
+                return
+        if _caps_player is not None:
+            _caps_player.shutdown()
+        _caps_player = BeepPlayer(path)
+        _caps_pitch_rendered = pitch
+        _debug(f"caps warning: built a player for {path}")
+    result = _caps_player.play(_beep_volume())
+    _debug(f"caps warning: played, vol={_beep_volume():.3f} result={result!r}")
 
 
 def _beep_for_character(text: str) -> None:
@@ -437,9 +604,58 @@ def _install_speech_dispatcher_hooks() -> None:
         _log.error("CapitalBeep: could not hook Speech Dispatcher: %s", error)
 
 
+_orig_keyboard_event_init = None
+
+
+def _keyboard_hook(self, pressed, keycode, keysym, modifiers, text):
+    """Watch keys for the caps lock warning, then get out of the way.
+
+    This is the one hook that looks at keys rather than at speech, and it has
+    to be: with key echo off -- which is how Toby reads -- nothing in Orca's
+    speech path ever sees the letters being typed, so there is nothing else to
+    hang this on.
+
+    **Why ``KeyboardEvent.__init__`` and not the obvious
+    ``InputEventManager.process_keyboard_event``.** On AT-SPI older than 2.60,
+    ``ax_device_manager.start_key_watcher`` takes a legacy branch and hands
+    ``Atspi.Device.add_key_watcher`` the *bound method*
+    ``self.process_keyboard_event``, captured at Orca's startup. AT-SPI then
+    holds that pre-patch object for the life of the session, so patching the
+    class afterwards has no effect whatsoever and the hook is simply never
+    called -- which is exactly what happened: the patch applied, the install
+    logged, every key went past it, and nothing beeped. On 2.60 and newer the
+    signal path connects ``_on_key_pressed``, which looks the method up late
+    and would have worked. This machine is on 2.58.8.
+
+    Every key event, on both paths, is built by constructing exactly one
+    ``KeyboardEvent`` from the one site in ``input_event_manager``, and a
+    constructor is looked up on the class when it runs. So this sees every key
+    regardless of AT-SPI version.
+
+    The original runs first and anything raised afterwards is swallowed: this
+    sits in front of every keystroke Orca handles, and a beep is never worth
+    breaking the keyboard for.
+    """
+    _orig_keyboard_event_init(self, pressed, keycode, keysym, modifiers, text)
+    try:
+        mode = _caps_mode()
+        wanted = caps_lock_beep_wanted(pressed, modifiers, text, mode)
+        if pressed and _debug_on():
+            shift = bool(modifiers & keybindings.SHIFT_MODIFIER_MASK)
+            _debug(f"key: text={text!r} modifiers=0x{modifiers:x} shift={shift} "
+                   f"not-typing={bool(modifiers & _NOT_TYPING_MASK)} "
+                   f"mode={mode} enabled={_enabled} warn={wanted}")
+        if wanted:
+            _beep_caps()
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        _log.warning("CapitalBeep: caps lock check failed: %s", error)
+        _debug(f"caps lock check failed: {type(error).__name__}: {error}")
+
+
 def _install_hooks() -> None:
     global _orig_speak, _orig_speak_character
     global _orig_spell_item, _orig_spell_phonetically
+    global _orig_keyboard_event_init
 
     # Orca 51: monkey-patch the SpeechPresenter singleton's methods instead
     # of the old module-level speech.speak / speech.speak_character functions.
@@ -459,6 +675,12 @@ def _install_hooks() -> None:
         _orig_spell_phonetically = speech_presenter.SpeechPresenter.spell_phonetically
         _patch(speech_presenter.SpeechPresenter, "spell_phonetically", _spell_phonetically_hook)
         _log.info("CapitalBeep: wrapped SpeechPresenter.spell_phonetically")
+
+    if _orig_keyboard_event_init is None:
+        _orig_keyboard_event_init = input_event.KeyboardEvent.__init__
+        _patch(input_event.KeyboardEvent, "__init__", _keyboard_hook)
+        _log.info("CapitalBeep: wrapped KeyboardEvent.__init__")
+        _debug("installed the keyboard hook for the caps lock warning")
 
     _install_speech_dispatcher_hooks()
 
@@ -519,9 +741,15 @@ def _deferred_setup() -> bool:
     return False
 
 
-def install() -> None:
-    """Start beeping. Called from the Extension's lifecycle hooks."""
-    global _installed
+def install(settings_source=None) -> None:
+    """Start beeping. Called from the Extension's lifecycle hooks.
+
+    ``settings_source`` is an optional zero-argument callable returning the
+    extension's settings dict. It is consulted per keystroke, so the caps lock
+    preferences take effect without reloading anything.
+    """
+    global _installed, _settings_source
+    _settings_source = settings_source
     if _installed:
         return
     _installed = True
@@ -536,7 +764,8 @@ def uninstall() -> None:
     disabling CapitalBeep in Orca's preferences actually stops it and a
     reload does not stack a second set of hooks on the first.
     """
-    global _installed, _player
+    global _installed, _player, _caps_player, _caps_pitch_rendered
+    global _settings_source, _orig_keyboard_event_init
     global _orig_speak, _orig_speak_character
     global _orig_spell_item, _orig_spell_phonetically
     global _orig_sd_char, _orig_sd_speak, _sync_available
@@ -546,15 +775,21 @@ def uninstall() -> None:
 
     _unpatch_all()
 
-    if _player is not None:
+    for name, player in (("player", _player), ("caps player", _caps_player)):
+        if player is None:
+            continue
         try:
-            _player.shutdown()
+            player.shutdown()
         except Exception as error:  # pylint: disable=broad-exception-caught
-            _log.warning("CapitalBeep: could not shut down the player: %s", error)
-        _player = None
+            _log.warning("CapitalBeep: could not shut down the %s: %s", name, error)
+    _player = None
+    _caps_player = None
+    _caps_pitch_rendered = None
+    _settings_source = None
 
     # The _orig_* values double as "already patched" guards, so they have
     # to be cleared too or a later install() would silently do nothing.
+    _orig_keyboard_event_init = None
     _orig_speak = None
     _orig_speak_character = None
     _orig_spell_item = None

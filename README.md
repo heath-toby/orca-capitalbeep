@@ -35,13 +35,20 @@ To remove it again:
     ./uninstall.sh
     orca --replace &
 
-Both scripts back up `orca-customizations.py` before touching it, and check that
-it still parses afterwards. Uninstalling restores the file exactly as it was.
+`install.sh` copies the package to
+`$XDG_DATA_HOME/orca/extensions/capitalbeep` and approves it with
+`orca --approve-extension`. Orca re-checks the hash of every file in the package
+on each start, so re-run the installer after editing anything.
 
 ## Use
 
 Press **Orca+Ctrl+Shift+C** to toggle the beep. The setting persists across
-restarts. There is no settings dialog by design.
+restarts.
+
+There is no settings dialog of its own, by design. The two caps lock settings
+below are *declared* to Orca and appear in **Orca Preferences → User
+Extensions → Capital Beep**, which costs no dialog code and keeps the on/off
+switch where it already is.
 
 ## Tuning
 
@@ -59,10 +66,10 @@ the frequency, duration and fade, so changing any of them regenerates it.
 
 ## How it works
 
-Orca has no add-on subsystem, so this hooks a few internals from
-`orca-customizations.py`. Every hook is individually guarded, so if a future Orca
-release moves something, Orca still starts normally and the `orca-capitalbeep`
-logger says what failed to attach.
+This is an Orca 51 user extension, and it hooks a few of Orca's internals from
+its `on_ready`. Every hook is individually guarded, so if a future Orca release
+moves something, Orca still starts normally and the `orca-capitalbeep` logger
+says what failed to attach.
 
 - Characters need no gating: `orca.speech.speak_character` is the single point
   every individually-read character passes through, covering navigation, flat
@@ -125,3 +132,66 @@ to the pipeline reaching `NULL`: a sink posts EOS only after it has played what
 it was given, so that interval is the beep's length plus the sink's latency.
 Shorter than the beep means the audio was discarded — which is how the sibling
 add-on was silenced for one build, by handing the sink a clip with no duration.
+
+## The caps lock warning
+
+A second, higher tone warns that caps lock is on. **Orca Preferences → User
+Extensions → Capital Beep** has two settings for it:
+
+1. **Warn that caps lock is on** —
+   - *When a lowercase letter is typed, because caps lock is on* (the default).
+     You held shift, caps lock was already on, and you got the opposite of what
+     you asked for. NVDA has shipped exactly this, on by default, since about
+     2010, under the name "Beep for lowercase with Capslock"; its purpose is to
+     catch caps lock left on by mistake, classically while typing a password.
+   - *On every letter typed while caps lock is on.* Noisier, but it tells you
+     caps lock is on the moment you start typing rather than waiting for you to
+     reach for shift — useful at a shell prompt, where you may type a whole
+     command without ever pressing shift.
+   - *Never.*
+2. **Pitch of the caps lock warning** — 1320 Hz by default, an octave above the
+   660 Hz capital beep so the two cannot be confused. Set it to 3000 for
+   NVDA's exact sound.
+
+### How caps lock is detected
+
+Not from the lock bit. The add-on works it out from the letter that actually
+arrived: shift held and a lowercase letter means caps lock is on, as does an
+unshifted uppercase one. That is deliberate — on Orca's **laptop** keyboard
+layout `Caps_Lock` *is* the Orca modifier, so the X lock state is not a thing
+worth trusting, while the character that came out is both ground truth and
+exactly what the warning is about. It also means the warning works on any
+layout that pairs its cases under shift, Cyrillic included.
+
+Letters pressed with the Orca modifier, Control or Alt are commands rather than
+typing and never warn. That first exclusion is not optional on the laptop
+layout: without it every Orca command would look like a letter typed with caps
+lock on.
+
+### Why it hooks keys and not speech
+
+Everything else in this add-on hangs off Orca's speech path. The caps lock
+warning cannot: with **key echo off**, nothing in that path ever sees the
+letters being typed. So it wraps `InputEventManager.process_keyboard_event`,
+the single point every key passes through, which carries both the modifier mask
+and the text the key produced.
+
+That hook sits in front of every keystroke Orca handles, so it is written to be
+impossible to trip over: anything raised inside it is swallowed and the key is
+forwarded regardless. `tests-capslock.py` asserts both that its signature still
+matches the method it replaces and that a beep which throws does not swallow
+the keystroke.
+
+## Tests
+
+```
+./install.sh && python3 tests-player.py && python3 tests-capslock.py
+```
+
+- `tests-player.py` — 8 rows on the audio lifecycle. The measurement is the
+  interval from `play()` to the pipeline reaching `NULL`: that is the beep's own
+  length plus the sink's latency, and anything shorter means the audio was
+  discarded.
+- `tests-capslock.py` — 39 rows on the warning's decision logic, which is a
+  pure function and so can be stated as a table, plus the keyboard-safety rows
+  above.

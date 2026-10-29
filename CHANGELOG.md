@@ -1,5 +1,52 @@
 # Changelog
 
+## 2.2.0
+
+**A second, higher tone warns that caps lock is on.**
+
+### Added
+
+- **Warn that caps lock is on**, in Orca Preferences → User Extensions → Capital Beep, with
+  three values. The default — *when a lowercase letter is typed, because caps lock is on* —
+  is the one NVDA has shipped on by default since about 2010 as "Beep for lowercase with
+  Capslock", for the reason it gives: catching caps lock left on by mistake, classically
+  while typing a password. The alternative, *on every letter typed while caps lock is on*,
+  is noisier but tells you at the first keystroke rather than waiting for you to reach for
+  shift — which is what you want at a shell prompt, where a whole command may never need
+  shift.
+
+- **Pitch of the caps lock warning**, 1320 Hz by default: an octave above the 660 Hz capital
+  beep, so the two cannot be confused. NVDA distinguishes its two beeps the same way and
+  uses 3000 Hz, which this setting will take.
+
+- **Caps lock is inferred from the letter that arrived, not read from the lock bit.** Shift
+  held and a lowercase letter means caps lock is on; so does an unshifted uppercase one.
+  The character that came out is both ground truth and exactly what the warning is about,
+  whereas a lock bit has to be the *right* lock bit: on a Wayland session there are two of
+  them, the compositor's and XWayland's copy, and which one reaches an add-on depends on
+  how the session routes accessibility key events. Reading the character sidesteps that
+  entirely, and works on any layout that pairs its cases under shift, Cyrillic included.
+
+- **The first hook in this add-on that watches keys rather than speech.** It has to be:
+  with key echo off, nothing in Orca's speech path ever sees the letters being typed.
+  `InputEventManager.process_keyboard_event` is the single point every key passes through
+  and carries both the modifier mask and the resulting text. Letters pressed with the Orca
+  modifier, Control or Alt are commands rather than typing and never warn — not optional on
+  the laptop layout, where otherwise every Orca command would look like a letter typed with
+  caps lock on.
+
+- **`tests-capslock.py`, 39 rows.** The decision is a pure function, so the whole rule is a
+  table. Two of the rows are not about beeping at all: that the hook's signature still
+  matches the method it replaces, and that a beep which raises does not swallow the
+  keystroke. That hook sits in front of every key Orca handles, and a beep is never worth
+  breaking the keyboard for.
+
+### Changed
+
+- **Preferences are now declared**, so the Settings button in User Extensions is live. The
+  on/off switch deliberately stays out of it: Orca+Ctrl+Shift+C announces and persists the
+  state, and the extension's own enable/disable is already in that pane.
+
 ## 2.1.1
 
 **Spelling a word with the Orca keybind no longer raises TypeError on recent Orca.**
